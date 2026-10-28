@@ -1049,6 +1049,9 @@ struct RuntimeTraceApi {
     /// Movie soundtracks as last sent to the audio frontend, by movie handle.
     movie_audio_sent: BTreeMap<i32, graph_effect::MovieAudioSent>,
     program_cache: HashMap<String, ethornell_script::BpProgram>,
+    /// Encoding for inline BP string literals. Dialogue pointers are decoded
+    /// at call time, but `0x05` operands are materialized during parsing.
+    text_encoding: &'static encoding_rs::Encoding,
     file_exists_cache: HashMap<String, bool>,
     file_size_cache: HashMap<String, i32>,
     title_ui_resources_loaded: bool,
@@ -1456,6 +1459,7 @@ impl RuntimeTraceApi {
             audio_requests: VecDeque::new(),
             movie_audio_sent: BTreeMap::new(),
             program_cache: HashMap::new(),
+            text_encoding: encoding_rs::SHIFT_JIS,
             file_exists_cache: HashMap::new(),
             file_size_cache: HashMap::new(),
             title_ui_resources_loaded: false,
@@ -2303,7 +2307,11 @@ impl RuntimeTraceApi {
             return program.clone();
         }
         let program = match self.manager.read_decoded_from_archive(archive, file) {
-            Ok(bytes) => ethornell_script::parse_bp_program(Some(key.clone()), &bytes),
+            Ok(bytes) => ethornell_script::parse_bp_program_with_encoding(
+                Some(key.clone()),
+                &bytes,
+                self.text_encoding,
+            ),
             Err(err) => {
                 if file_policy::restricted() {
                     self.host
@@ -9494,15 +9502,21 @@ impl RuntimeEngine {
         native_dialog_presentation: bool,
         encoding: &'static encoding_rs::Encoding,
     ) -> Self {
-        let program = ethornell_script::parse_bp_program(Some(script.to_string()), bytes);
+        let program = ethornell_script::parse_bp_program_with_encoding(
+            Some(script.to_string()),
+            bytes,
+            encoding,
+        );
         let mut vm = ethornell_vm::Vm::new();
         vm.set_native_abi_profile(confirmed_native_profile(&manager, bytes));
         vm.set_graph_text_encoding(encoding);
+        vm.set_native_text_encoding(encoding);
         vm.start(&program);
         Self {
             vm,
             api: {
                 let mut api = RuntimeTraceApi::new_with_native_root(manager, native_root);
+                api.text_encoding = encoding;
                 api.native_dialog_presentation = native_dialog_presentation;
                 api
             },

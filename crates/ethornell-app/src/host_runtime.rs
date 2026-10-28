@@ -911,14 +911,20 @@ impl RuntimeEngine {
         strict: bool,
         encoding: &'static encoding_rs::Encoding,
     ) -> Self {
-        let program = ethornell_script::parse_bp_program(Some(script.into()), bytes);
+        let program =
+            ethornell_script::parse_bp_program_with_encoding(Some(script.into()), bytes, encoding);
         let mut vm = ethornell_vm::Vm::new();
         vm.set_native_abi_profile(confirmed_native_profile(&manager, bytes));
         vm.set_graph_text_encoding(encoding);
+        vm.set_native_text_encoding(encoding);
         vm.start(&program);
         Self {
             vm,
-            api: RuntimeTraceApi::new_with_native_root(manager, root),
+            api: {
+                let mut api = RuntimeTraceApi::new_with_native_root(manager, root);
+                api.text_encoding = encoding;
+                api
+            },
             options: ethornell_vm::VmRunOptions {
                 max_steps: ethornell_vm::DEFAULT_COOPERATIVE_WATCHDOG_STEPS,
                 trace,

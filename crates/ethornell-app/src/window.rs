@@ -574,9 +574,13 @@ impl ApplicationHandler for WindowApp {
                     }
                     if runtime.api.window_mode == 0 {
                         if let Some((width, height)) = runtime.api.pending_window_size.take() {
-                            if let Some(size) =
-                                window.request_surface_size(PhysicalSize::new(width, height).into())
-                            {
+                            // ConfigureScreen/SetWindowSize carry game pixels;
+                            // use a logical size so a 1280x720 game gets a
+                            // 1280x720-point window on a Retina display too.
+                            if let Some(size) = window.request_surface_size(
+                                winit::dpi::LogicalSize::new(f64::from(width), f64::from(height))
+                                    .into(),
+                            ) {
                                 renderer.resize(size.width, size.height);
                                 runtime.api.window_surface_width =
                                     size.width.min(i32::MAX as u32) as i32;

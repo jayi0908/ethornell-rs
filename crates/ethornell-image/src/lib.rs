@@ -254,6 +254,7 @@ fn looks_like_raw_bgi_image(buf: &[u8]) -> bool {
         return false;
     }
     let pixel_bytes = match bpp {
+        8 => 1usize,
         24 => 3usize,
         32 => 4usize,
         _ => return false,
@@ -267,7 +268,7 @@ fn decode_raw_bgi_image(data: &[u8]) -> Result<DecodedImage> {
     let width = cursor.read_u16::<LittleEndian>()? as u32;
     let height = cursor.read_u16::<LittleEndian>()? as u32;
     let bpp = cursor.read_u32::<LittleEndian>()?;
-    if !matches!(bpp, 24 | 32) {
+    if !matches!(bpp, 8 | 24 | 32) {
         return Err(EthornellError::UnsupportedFormat(format!(
             "raw BGI image bpp {bpp} is not implemented"
         )));
@@ -282,12 +283,20 @@ fn decode_raw_bgi_image(data: &[u8]) -> Result<DecodedImage> {
         )));
     }
     let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-    for pixel in pixels.chunks_exact(pixel_bytes) {
-        let b = pixel[0];
-        let g = pixel[1];
-        let r = pixel[2];
-        let a = if pixel_bytes == 4 { pixel[3] } else { 0xff };
-        rgba.extend_from_slice(&[r, g, b, a]);
+    if pixel_bytes == 1 {
+        // Native 8-bit images (CBG v1 and raw masks) are grayscale coverage
+        // images; the target expands a byte to the first color channel.
+        for &value in pixels {
+            rgba.extend_from_slice(&[value, value, value, 0xff]);
+        }
+    } else {
+        for pixel in pixels.chunks_exact(pixel_bytes) {
+            let b = pixel[0];
+            let g = pixel[1];
+            let r = pixel[2];
+            let a = if pixel_bytes == 4 { pixel[3] } else { 0xff };
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
     }
     Ok(DecodedImage {
         width,

@@ -1,5 +1,6 @@
 use ab_glyph::{Font, FontArc, FontVec};
 use ethornell_core::{EthornellError, Result};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -42,6 +43,46 @@ impl FontProvider {
                 missing
             )))
         }
+    }
+
+    /// Replaces characters the font has no glyph for with visually close or
+    /// harmless alternatives. Localized scripts occasionally keep a Japanese
+    /// separator such as U+30FB while the supplied patch font only covers
+    /// Chinese punctuation; a strict coverage check must not abort the game
+    /// for a single decorative mark.
+    pub fn fallback_text<'a>(font: &FontArc, text: &'a str) -> Cow<'a, str> {
+        if !text
+            .chars()
+            .any(|ch| !ch.is_control() && font.glyph_id(ch).0 == 0)
+        {
+            return Cow::Borrowed(text);
+        }
+        let mut result = String::with_capacity(text.len());
+        for ch in text.chars() {
+            if ch.is_control() || font.glyph_id(ch).0 != 0 {
+                result.push(ch);
+            } else {
+                result.push(Self::fallback_char(font, ch));
+            }
+        }
+        Cow::Owned(result)
+    }
+
+    fn fallback_char(font: &FontArc, ch: char) -> char {
+        let candidates: &[char] = match ch {
+            '\u{30fb}' => &['\u{00b7}', '\u{ff0f}', '/', '-'],
+            '\u{ff61}' => &['\u{3002}', '.'],
+            '\u{ff62}' => &['\u{300c}', '"'],
+            '\u{ff63}' => &['\u{300d}', '"'],
+            '\u{ff64}' => &['\u{3001}', ','],
+            '\u{ff65}' => &['\u{30fb}', '\u{00b7}'],
+            _ => &[],
+        };
+        candidates
+            .iter()
+            .copied()
+            .find(|candidate| font.glyph_id(*candidate).0 != 0)
+            .unwrap_or(' ')
     }
 
     pub fn load_system_cjk_font() -> Result<FontArc> {
@@ -93,6 +134,14 @@ mod tests {
         );
         assert!(FontProvider::require_coverage(&font, "\u{10ffff}").is_err());
         assert!(FontProvider::require_coverage(&font, "日本語").is_ok());
+    }
+
+    #[test]
+    fn fallback_text_replaces_uncovered_characters() {
+        let font = FontProvider::load_system_cjk_font().expect("system CJK font");
+        let fallback = FontProvider::fallback_text(&font, "A\u{10ffff}B");
+        assert_eq!(fallback.as_ref(), "A B");
+        assert!(FontProvider::missing_glyphs(&font, fallback.as_ref()).is_empty());
     }
 
     #[test]

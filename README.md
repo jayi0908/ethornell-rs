@@ -60,10 +60,16 @@ ethornell run --game /path/to/game --text-encoding auto
 ```
 
 `ETHORNELL_TEXT_ENCODING=auto|cp932|gbk` is also supported on desktop/headless;
-the command-line choice takes priority. This selects graphics text buffers,
-including dialogue and speaker names. Resource names and BP system strings
-keep their existing Shift-JIS encoding. Auto selects one display code page for
+the command-line choice takes priority. Auto selects one display code page for
 the session; it does not select a different encoding for each file.
+
+The selected code page also applies to native `char *` buffers (paths, dialog
+text and error reports) and to inline BP string literals. Chinese patches can
+mix GBK translated text with untranslated Shift-JIS UI strings; Shift-JIS is
+kept for a literal when it decodes cleanly to fullwidth kana. When the patch
+ships its own Chinese font, point `ETHORNELL_FONT` at it (for example
+`fonts.arc` of the *DaitosyokanNoHitsujikai* patch contains `Daito_Hei.ttf`);
+otherwise a system CJK font is used.
 
 Auto detection is compiled only for PC builds. iOS, Android, Web, Vita and
 Switch retain their existing explicit/fixed encoding configuration and do not

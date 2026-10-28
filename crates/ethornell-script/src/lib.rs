@@ -1,5 +1,5 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use encoding_rs::SHIFT_JIS;
+use encoding_rs::{Encoding, SHIFT_JIS};
 use ethornell_core::Result;
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 use std::collections::HashMap;
@@ -867,6 +867,22 @@ pub fn disassemble_bp(buf: &[u8]) -> Vec<BpInstruction> {
 }
 
 pub fn parse_bp_program(script_name: Option<String>, buf: &[u8]) -> BpProgram {
+    parse_bp_program_with_encoding(script_name, buf, SHIFT_JIS)
+}
+
+/// Parses a BP module, decoding its inline string literals with `encoding`.
+///
+/// Localized scripts replace the original Shift-JIS text with another legacy
+/// encoding (the Chinese releases use GBK). Dialogue pointers are decoded by
+/// the VM at call time, but `0x05` string operands are materialized here as
+/// `BpOperand::String`, so the parser must know the same encoding. Otherwise a
+/// GBK `【%s】` literal becomes Shift-JIS mojibake and a later GBK `sprintf`
+/// turns the unmappable halfwidth characters into `&#NNNNN;` text.
+pub fn parse_bp_program_with_encoding(
+    script_name: Option<String>,
+    buf: &[u8],
+    encoding: &'static Encoding,
+) -> BpProgram {
     let range = detect_code_range(buf);
     let module_size = declared_module_size(buf);
     let code = Arc::new(buf[range.start..range.end].to_vec());
@@ -911,7 +927,7 @@ pub fn parse_bp_program(script_name: Option<String>, buf: &[u8]) -> BpProgram {
                         operands.push(BpOperand::U16(value));
                     } else if opcode_byte == 0x05 {
                         let target = (offset as i64 + value as i16 as i64) as usize;
-                        if let Some(text) = read_c_string(buf, target) {
+                        if let Some(text) = read_c_string(buf, target, encoding) {
                             strings.push(text.clone());
                             operands.push(BpOperand::String(text));
                         } else {
@@ -1123,7 +1139,7 @@ fn read_u32_operand(
     }
 }
 
-fn read_c_string(buf: &[u8], offset: usize) -> Option<String> {
+fn read_c_string(buf: &[u8], offset: usize, encoding: &'static Encoding) -> Option<String> {
     if offset >= buf.len() {
         return None;
     }
@@ -1131,11 +1147,37 @@ fn read_c_string(buf: &[u8], offset: usize) -> Option<String> {
         .iter()
         .position(|&b| b == 0)
         .map(|pos| offset + pos)?;
-    let (decoded, _, had_errors) = SHIFT_JIS.decode(&buf[offset..end]);
-    if had_errors {
+    let bytes = &buf[offset..end];
+    let (decoded, had_errors) = decode_script_literal(bytes, encoding);
+    if had_errors && encoding == SHIFT_JIS {
         None
     } else {
-        Some(decoded.to_string())
+        Some(decoded)
+    }
+}
+
+/// Localized releases can mix encodings inside one module: translated text is
+/// GBK while untranslated system/UI strings keep the original Shift-JIS. A
+/// pure GBK decode turns the latter into plausible-looking Chinese mojibake,
+/// and a pure Shift-JIS decode turns `【%s】` into halfwidth katakana that the
+/// GBK writer later expands to `&#NNNNN;`. Prefer Shift-JIS only when it
+/// decodes cleanly to fullwidth kana and the GBK candidate has none; otherwise
+/// keep the requested encoding.
+fn decode_script_literal(bytes: &[u8], encoding: &'static Encoding) -> (String, bool) {
+    let (decoded, _, had_errors) = encoding.decode(bytes);
+    if encoding != encoding_rs::GBK {
+        return (decoded.into_owned(), had_errors);
+    }
+    let (sjis, _, sjis_errors) = SHIFT_JIS.decode(bytes);
+    let kana = |text: &str| {
+        text.chars()
+            .filter(|ch| matches!(*ch, '\u{3040}'..='\u{30ff}'))
+            .count()
+    };
+    if !sjis_errors && kana(&sjis) > 0 && kana(&decoded) == 0 {
+        (sjis.into_owned(), false)
+    } else {
+        (decoded.into_owned(), had_errors)
     }
 }
 
@@ -1296,6 +1338,34 @@ mod tests {
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0].opcode.name(), "ret");
         assert_eq!(instructions[0].offset, 0x10);
+    }
+
+    #[test]
+    fn string_literals_follow_the_requested_encoding() {
+        let bytes = b"\xa1\xbe%s\xa1\xbf\0\xc9\xd9\xc5\xae\0";
+        assert_eq!(
+            read_c_string(bytes, 0, encoding_rs::GBK).as_deref(),
+            Some("【%s】")
+        );
+        assert_eq!(
+            read_c_string(bytes, 7, encoding_rs::GBK).as_deref(),
+            Some("少女")
+        );
+        assert_eq!(
+            read_c_string(bytes, 0, encoding_rs::SHIFT_JIS).as_deref(),
+            Some("｡ｾ%s｡ｿ")
+        );
+        // Untranslated Shift-JIS literals embedded in a GBK module stay
+        // Japanese; the title and message-set preview depend on this.
+        let title = b"\xe2\x71\x97\x83\x82\xcc\x83\x86\x81\x5b\x83\x58\x83\x65\x83\x42\x83\x41\0";
+        assert_eq!(
+            read_c_string(title, 0, encoding_rs::GBK).as_deref(),
+            Some("穢翼のユースティア")
+        );
+        assert_eq!(
+            read_c_string(title, 0, encoding_rs::SHIFT_JIS).as_deref(),
+            Some("穢翼のユースティア")
+        );
     }
 
     #[test]

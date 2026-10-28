@@ -68,7 +68,23 @@ fn default_font(
 ) -> Result<FontArc> {
     match snapshot {
         Some(path) => ethornell_render::FontProvider::load_file(path, 0),
-        None => ethornell_render::load_text_font(text),
+        None => {
+            let gbk = std::env::var("ETHORNELL_TEXT_ENCODING")
+                .ok()
+                .is_some_and(|label| {
+                    matches!(
+                        label.trim().to_ascii_lowercase().as_str(),
+                        "gbk" | "cp936" | "windows-936"
+                    )
+                });
+            if text.is_none() && gbk {
+                // A Japanese system font covers 日本語中文 but not the full
+                // simplified/traditional repertoire used by Chinese patches.
+                ethornell_render::FontProvider::load_system_for_text("A日本語中文简体繁體")
+            } else {
+                ethornell_render::load_text_font(text)
+            }
+        }
     }
 }
 

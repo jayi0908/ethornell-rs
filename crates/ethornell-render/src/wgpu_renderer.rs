@@ -890,6 +890,7 @@ impl<'w> Renderer<'w> {
                     clip,
                     ..
                 } => {
+                    let text = FontProvider::fallback_text(&self.font, &text);
                     FontProvider::require_coverage(&self.font, &text)?;
                     let key = TextCacheKey::new(&text, size, line_height, color, &styles, glow);
                     active_text_keys.insert(key.clone());

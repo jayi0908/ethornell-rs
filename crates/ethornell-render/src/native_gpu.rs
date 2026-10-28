@@ -424,6 +424,7 @@ impl Renderer<'_> {
                 z,
             } = c
             {
+                let text = FontProvider::fallback_text(&self.font, &text).into_owned();
                 FontProvider::require_coverage(&self.font, &text)?;
                 let key = TextKey {
                     text: text.clone(),

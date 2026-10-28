@@ -2332,6 +2332,10 @@ pub struct Vm {
     /// scheduler pass (the root and its children).
     pass_yields: usize,
     graph_text_encoding: Option<&'static encoding_rs::Encoding>,
+    /// Code page for native `char *` buffers (paths, dialog text, error
+    /// reports). Shift-JIS matches the original Japanese builds; GBK selects
+    /// the ANSI code page used by the Chinese fan translations.
+    native_text_encoding: Option<&'static encoding_rs::Encoding>,
     pub stack: Vec<Value>,
     operand_slots: Vec<Value>,
     operand_slots_synced_len: usize,
@@ -2666,6 +2670,20 @@ impl Vm {
         for task in &mut self.async_tasks {
             task.vm.set_graph_text_encoding(encoding);
         }
+    }
+
+    /// Select the code page of native `char *` buffers passed to and from the
+    /// host: paths, dialog text and error reports. The original Japanese
+    /// builds use Shift-JIS; Chinese fan patches use GBK.
+    pub fn set_native_text_encoding(&mut self, encoding: &'static encoding_rs::Encoding) {
+        self.native_text_encoding = Some(encoding);
+        for task in &mut self.async_tasks {
+            task.vm.set_native_text_encoding(encoding);
+        }
+    }
+
+    fn native_text_encoding(&self) -> &'static encoding_rs::Encoding {
+        self.native_text_encoding.unwrap_or(encoding_rs::SHIFT_JIS)
     }
 
     pub fn run<A>(
@@ -6661,7 +6679,7 @@ impl Vm {
         let encoding = if matches!(group, 0x90..=0x92) {
             self.graph_text_encoding.unwrap_or(encoding_rs::SHIFT_JIS)
         } else {
-            encoding_rs::SHIFT_JIS
+            self.native_text_encoding()
         };
         let strings = native_strings::string_arguments(group, id);
         let pointers = native_strings::pointer_arguments(group, id);
@@ -8145,7 +8163,7 @@ impl Vm {
     }
 
     fn read_c_string(&self, ptr: u32) -> VmResult<String> {
-        self.read_c_string_with_encoding(ptr, encoding_rs::SHIFT_JIS)
+        self.read_c_string_with_encoding(ptr, self.native_text_encoding())
     }
 
     fn read_c_string_with_encoding(
@@ -8257,7 +8275,7 @@ impl Vm {
         let text = if self.native_abi_profile == NativeAbiProfile::Amachoco {
             String::from_utf8_lossy(bytes)
         } else {
-            encoding_rs::SHIFT_JIS.decode(bytes).0
+            self.native_text_encoding().decode(bytes).0
         };
         if self.encode_native_string(&text).as_ref() == bytes {
             return self.write_c_string(ptr, &text);
@@ -8272,7 +8290,7 @@ impl Vm {
     }
 
     fn write_c_string_raw(&mut self, ptr: u32, text: &str) -> VmResult<()> {
-        let encoded=if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(text).0};
+        let encoded=if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {self.native_text_encoding().encode(text).0};
         let bytes = encoded.as_ref();
         let range = self.resolve_write_range(ptr, bytes.len().saturating_add(1))?;
         let start = range.start;
@@ -8282,13 +8300,13 @@ impl Vm {
         Ok(())
     }
     fn encode_native_string<'a>(&self,text:&'a str)->std::borrow::Cow<'a,[u8]> {
-        if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(text).0}
+        if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {self.native_text_encoding().encode(text).0}
     }
     fn decode_native_string_lossy(&self, bytes: &[u8]) -> String {
         if self.native_abi_profile == NativeAbiProfile::Amachoco {
             String::from_utf8_lossy(bytes).into_owned()
         } else {
-            encoding_rs::SHIFT_JIS.decode(bytes).0.into_owned()
+            self.native_text_encoding().decode(bytes).0.into_owned()
         }
     }
 
@@ -8310,12 +8328,12 @@ impl Vm {
         for ch in text.chars() {
             let mut candidate = bounded.clone();
             candidate.push(ch);
-            if encoding_rs::SHIFT_JIS.encode(&candidate).0.len() > max_bytes {
+            if self.native_text_encoding().encode(&candidate).0.len() > max_bytes {
                 break;
             }
             bounded.push(ch);
         }
-        let byte_len = encoding_rs::SHIFT_JIS.encode(&bounded).0.len();
+        let byte_len = self.native_text_encoding().encode(&bounded).0.len();
         self.write_c_string_raw(ptr, &bounded)?;
         self.clear_shadow_values(ptr, byte_len.saturating_add(1));
         Ok(byte_len)
@@ -11889,7 +11907,7 @@ impl Vm {
     }
 
     fn value_as_string_lossy(&self, value: Value) -> VmResult<String> {
-        self.value_as_string_with_encoding(value, encoding_rs::SHIFT_JIS)
+        self.value_as_string_with_encoding(value, self.native_text_encoding())
     }
 
     fn value_as_string_with_encoding(
@@ -11932,7 +11950,7 @@ impl Vm {
     fn value_as_fixed_bytes(&self, value: Value, size: usize) -> VmResult<Vec<u8>> {
         match value {
             Value::Str(text) => {
-                let encoded=if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {encoding_rs::SHIFT_JIS.encode(&text).0};
+                let encoded=if self.native_abi_profile==NativeAbiProfile::Amachoco {std::borrow::Cow::Borrowed(text.as_bytes())} else {self.native_text_encoding().encode(&text).0};
                 let mut bytes = Vec::with_capacity(size);
                 bytes.extend_from_slice(&encoded);
                 bytes.push(0);
